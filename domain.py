@@ -3,8 +3,11 @@ import numpy as np
 
 def truck_load(truck_route, problem):
 
-
-
+    stops = truck_route[truck_route != -1]
+    #print(stops)
+    if stops.shape[0] == 0:
+        return 0
+    return np.sum(problem.customers[stops, 3])
 
 def generate_random_population(problem, size):
 
@@ -24,16 +27,14 @@ def generate_random_population(problem, size):
 
     for i in range(size):
 
-        specimen = np.zeros((max_trucks, max_route))-1
+        specimen = np.zeros((max_trucks, max_route), dtype=np.int32)-1
         for j, c in enumerate(problem.customers):
             rand = np.arange(0, max_trucks)
             np.random.shuffle(rand)
             for t in rand:
-                print(specimen[t][specimen[t] != -1].shape)
-                truck_custom = specimen[t][specimen[t] != -1]
-                load = np.sum(problem.customers[truck_custom]) if truck_custom.shape[0] + c[4] else 0
-                if load <= max_route:
-                    specimen[t, np.where(specimen[t] == -1)] = j
+                if truck_load(specimen[t], problem) + c[3] <= max_route:
+                    specimen[t, np.where(specimen[t] == -1)[0]] = j
+                    break
 
         print(specimen)
         input()
