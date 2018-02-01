@@ -16,6 +16,7 @@ def generate_random_population(problem, size):
     max_capacity = np.max(problem.depots[:, 2])
     n_customers = problem.customers.shape[0]
 
+    # calculate max possible customers
     route = np.sort(problem.customers[:, 3])
     max_route = 0
     n = 0
@@ -25,19 +26,19 @@ def generate_random_population(problem, size):
             max_route = i-1
             break
 
+    # distribute customers
     for i in range(size):
 
         specimen = np.zeros((max_trucks, max_route), dtype=np.int32)-1
-        for j, c in enumerate(problem.customers):
+        for j in range(n_customers):
             rand = np.arange(0, max_trucks)
             np.random.shuffle(rand)
             for t in rand:
-                if truck_load(specimen[t], problem) + c[3] <= max_route:
-                    specimen[t, np.where(specimen[t] == -1)[0]] = j
+                if truck_load(specimen[t], problem) + problem.customers[j][3] <= max_capacity:
+                    specimen[t, np.argmin(specimen[t])] = j
                     break
 
-        print(specimen)
-        input()
+        population.append(specimen)
 
     return population
 
@@ -55,85 +56,110 @@ def encode(specimen, problem):
 
             truck = {
                 'depot': i//problem.n_trucks_per_depot,
-                'route': np.reshape(stop_sort, stops.shape)
+                'route': r[r != -1]
             }
             trucks.append(truck)
 
     return trucks
 
+
 def fitness_fn(problem, population):
-    fit_temp = np.zeros((len(population), 2))
+    fitness = np.zeros(len(population))
     for i, specimen in enumerate(population):
 
         for j, truck in enumerate(encode(specimen, problem)):
 
             depot = problem.depots[truck['depot']]
-            load = depot.truck_capacity
-            pos = depot.coords
+            pos = depot[:2]
             distance = 0
             for c in truck['route']:
 
                 customer = problem.customers[c]
-                distance += np.sqrt((pos[0] - customer.coords[0])**2 * (pos[1] - customer.coords[1])**2)
+                distance += np.sqrt((pos[0] - customer[0])**2 + (pos[1] - customer[1])**2)
 
-                pos = customer.coords
-                load -= customer.demand
+                pos = customer[:2]
 
-            distance += np.sqrt((pos[0] - depot.coords[0])**2 * (pos[1] - depot.coords[1])**2)
-            fit_temp[i][0] += distance
-            fit_temp[i][1] += load*(-1) if load < 0 else 0
+            distance += np.sqrt((pos[0] - depot[0])**2 + (pos[1] - depot[1])**2)
+            fitness[i] += distance
 
-
-    f_max = np.max(fit_temp, axis=0)
-    f_max[f_max == 0] = 1
-    f_max[0] *= 10
-    normal_fit = fit_temp/f_max
-    normal_fit = np.sum(normal_fit, axis=1)
-
-    return normal_fit
+    return fitness
 
 
+def crossover(problem, parent1, parent2, crossover_rate=.1):
 
-def crossover(parent, truck_mut_rate=.01, route_mut_rate=.1):
+    child = np.zeros(parent1.shape, dtype=np.int32)-1
+    taken = np.zeros(problem.customers.shape[0])
 
-    child = {'depots': np.copy(parent['depots']),
-             'route': np.copy(parent['route']),
-             'fitness': -1}
+    for i in range(parent1.shape[0]):
+        for j in range(parent1.shape[1]):
+            if taken[parent2[i, j]] != 1 and np.random.rand(1) > crossover_rate and parent2[i, j] != -1 and \
+                    (truck_load(child[i], problem) + problem.customers[parent2[i, j], 3]) < problem.depots[0][2]:
 
-    rand = np.random.rand(parent['depots'].shape[0]) < truck_mut_rate
-    child['depots'][rand] = (child['depots'][rand]-1)*-1
+                child[i, j] = parent2[i, j]
+                taken[parent2[i, j]] = 1
 
-    rand = np.random.rand(parent1['route'].shape[0])
-    for i, (p1, p2) in enumerate(zip(parent1['route'], parent2['route'])):
-        child['route'][i] = p1 if rand[i] > .5 else p2
+            elif taken[parent1[i, j]] != 1 and parent1[i, j] != -1 and \
+                 (truck_load(child[i], problem) + problem.customers[parent1[i, j], 3]) < problem.depots[0][2]:
+
+                child[i, j] = parent1[i, j]
+                taken[parent1[i, j]] = 1
+            else:
+                break
+
+    for i in np.where(taken==0)[0]:
+        rand = np.arange(0, parent1.shape[1])
+        np.random.shuffle(rand)
+
+        for j in rand:
+            if (truck_load(child[j], problem) + problem.customers[i, 3]) <= problem.depots[0, 2]:
+                child[j, np.argmin(child[j])] = i
+                break
 
     return child
 
 
-def generate_next_generation(population, elitism=0):
+def generate_next_generation(problem, population, fitness, elitism=0):
 
     next_population = []
 
-    pf_sum = 0
-    for s in population:
-        pf_sum += s['fitness']
+    pf_sum = np.sum(fitness)
+    fitness = np.max(fitness) - fitness
 
     while len(next_population) < (len(population)-elitism):
 
         rand = np.sort(np.random.rand(2)*pf_sum)
         acc = 0
         p1 = None
-        for s in population:
-            acc += s['fitness']
+        for i in range(len(population)):
+            acc += fitness[i]
             if acc >= rand[0] and p1 is None:
-                p1 = s
+                p1 = i
             elif acc >= rand[1]:
-                next_population.append(crossover(p1, s))
+                next_population.append(crossover(problem, population[p1], population[i]))
                 break
 
-    sorted(population, key=lambda x: x['fitness'])
-
-    for i in range(elitism):
+    for i in np.argsort(fitness)[::-1][:elitism]:
         next_population.append(population[i])
 
     return next_population
+
+
+def compliment_mutate(specimen):
+
+    specimen = np.copy(specimen)
+    specimen[specimen != -1] = np.max(specimen) - specimen[specimen != -1]
+    return specimen
+
+
+def row_inverse_mutate(specimen):
+
+    specimen = np.copy(specimen)
+    row_i = np.random.randint(0, specimen.shape[0])
+    row = specimen[row_i]
+    row_width = row[row != -1].shape[0]
+    if row_width > 1:
+        rmin = np.random.randint(0, row_width-1)
+        rmax = np.random.randint(rmin+1, row_width)
+        specimen[row_i, rmin:rmax] = specimen[row_i, rmin:rmax][::-1]
+        print(row_i, rmin, rmax)
+    return specimen
